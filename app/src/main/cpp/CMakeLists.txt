@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.18)
+project(karaokeflow)
+add_library(karaokeflow_synth SHARED synth.cpp)
+target_compile_features(karaokeflow_synth PRIVATE cxx_std_11)
+target_link_libraries(karaokeflow_synth log)
