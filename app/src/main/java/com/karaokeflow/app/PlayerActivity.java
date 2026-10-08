@@ -16,14 +16,14 @@ import java.util.concurrent.*;
 
 public class PlayerActivity extends Activity implements SurfaceHolder.Callback {
     JSONArray playlist;int index=0, restorePosition=0, generation=0, lyricOffset=0;
-    MediaPlayer player; boolean ready=false, foreground=false, autoStart=true, seeking=false, videoMode=false;
+    MediaPlayer player; SoundFontPlayer sfPlayer; boolean ready=false, foreground=false, autoStart=true, seeking=false, videoMode=false;
     TextView title,lyrics,nextLine,time,offsetLabel;Button toggle;SeekBar seek;
     SurfaceView surface;LinearLayout lyricPanel;MidiLyrics midi;
     final Handler handler=new Handler(Looper.getMainLooper());
     final ExecutorService worker=Executors.newSingleThreadExecutor();
     AudioManager audio;boolean hasFocus=false;
     final AudioManager.OnAudioFocusChangeListener focus=change->{if(change<0)pausePlayback();};
-    final Runnable progress=new Runnable(){public void run(){if(ready&&player!=null){try{int pos=player.getCurrentPosition();if(!seeking)seek.setProgress(pos);time.setText(stamp(pos)+" / "+stamp(player.getDuration()));showLyrics(pos+lyricOffset);}catch(IllegalStateException ignored){}}handler.postDelayed(this,80);}};
+    final Runnable progress=new Runnable(){public void run(){if(ready){try{int pos=sfPlayer!=null?(int)sfPlayer.position():player.getCurrentPosition();if(!seeking)seek.setProgress(pos);time.setText(stamp(pos)+" / "+stamp(sfPlayer!=null?(int)sfPlayer.duration():player.getDuration()));showLyrics(pos+lyricOffset);}catch(IllegalStateException ignored){}}handler.postDelayed(this,80);}};
     @Override public void onCreate(Bundle state){
         super.onCreate(state);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         audio=(AudioManager)getSystemService(AUDIO_SERVICE);
@@ -33,15 +33,15 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback {
         lyricOffset=getSharedPreferences("playback",0).getInt("lyricOffset",0);
         LinearLayout root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(Color.rgb(9,15,29));
         root.setOnApplyWindowInsetsListener((v,w)->{v.setPadding(w.getSystemWindowInsetLeft()+12,w.getSystemWindowInsetTop()+6,w.getSystemWindowInsetRight()+12,w.getSystemWindowInsetBottom()+6);return w;});setContentView(root);
-        title=label(17);root.addView(title);
+        title=label(22);title.setTextColor(Color.rgb(235,243,255));title.setPadding(12,24,12,18);root.addView(title);
         FrameLayout stage=new FrameLayout(this);root.addView(stage,new LinearLayout.LayoutParams(-1,0,1));
         surface=new SurfaceView(this);surface.getHolder().addCallback(this);stage.addView(surface,new FrameLayout.LayoutParams(-1,-1));
         lyricPanel=new LinearLayout(this);lyricPanel.setOrientation(1);lyricPanel.setGravity(Gravity.CENTER);
-        lyrics=label(30);nextLine=label(18);nextLine.setTextColor(Color.rgb(153,170,198));lyricPanel.addView(lyrics);lyricPanel.addView(nextLine);stage.addView(lyricPanel,new FrameLayout.LayoutParams(-1,-1));
+        lyrics=label(35);lyrics.setTypeface(null,1);nextLine=label(21);nextLine.setTextColor(Color.rgb(153,170,198));lyricPanel.addView(lyrics);lyricPanel.addView(nextLine);stage.addView(lyricPanel,new FrameLayout.LayoutParams(-1,-1));
         time=label(12);root.addView(time);seek=new SeekBar(this);root.addView(seek);
-        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar s){seeking=true;}public void onProgressChanged(SeekBar s,int p,boolean user){if(user)showLyrics(p+lyricOffset);}public void onStopTrackingTouch(SeekBar s){if(ready)player.seekTo(s.getProgress());seeking=false;}});
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar s){seeking=true;}public void onProgressChanged(SeekBar s,int p,boolean user){if(user)showLyrics(p+lyricOffset);}public void onStopTrackingTouch(SeekBar s){if(ready){if(sfPlayer!=null)sfPlayer.seek(s.getProgress());else player.seekTo(s.getProgress());}seeking=false;}});
         LinearLayout controls=new LinearLayout(this);root.addView(controls);
-        button(controls,"Library",()->finish());toggle=button(controls,"Loading…",()->{if(!ready)return;if(player.isPlaying())pausePlayback();else startPlayback();});button(controls,"Restart",()->{if(ready){player.seekTo(0);startPlayback();}});button(controls,"Next",()->next());
+        button(controls,"‹ Library",()->finish());toggle=button(controls,"Loading…",()->{if(!ready)return;if(sfPlayer!=null?sfPlayer.isPlaying():player.isPlaying())pausePlayback();else startPlayback();});button(controls,"↺ Restart",()->{if(ready){if(sfPlayer!=null)sfPlayer.seek(0);else player.seekTo(0);startPlayback();}});button(controls,"Next ›",()->next());
         LinearLayout timing=new LinearLayout(this);root.addView(timing);
         button(timing,"Lyrics −0.2s",()->adjust(-200));offsetLabel=label(12);timing.addView(offsetLabel,new LinearLayout.LayoutParams(0,-2,1));button(timing,"Lyrics +0.2s",()->adjust(200));updateOffset();
         handler.post(progress);open();
@@ -66,9 +66,15 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback {
                     while((n=in.read(buf))!=-1){if(out.size()+n>16*1024*1024)throw new IOException("MIDI file exceeds 16 MB");out.write(buf,0,n);}bytes=out.toByteArray();
                 }
                 MidiLyrics parsed=MidiLyrics.parse(bytes);File file=new File(getCacheDir(),"midi-"+token+".mid");try(FileOutputStream out=new FileOutputStream(file)){out.write(bytes);}
-                handler.post(()->{if(token!=generation||isFinishing()){file.delete();return;}midi=parsed;prepare(null,file,token);});
+                handler.post(()->{if(token!=generation||isFinishing()){file.delete();return;}midi=parsed;String sf=AutoLibrary.soundfont(this);if(!sf.isEmpty()){prepareSf(bytes,Uri.parse(sf),token);file.delete();}else prepare(null,file,token);});
             }catch(Exception e){handler.post(()->{if(token==generation&&!isFinishing())error("Cannot read this MIDI/KAR file. "+e.getMessage());});}
         });
+    }
+    void prepareSf(byte[] midiBytes,Uri font,int token){
+        worker.execute(()->{try{
+            SoundFontPlayer synth=new SoundFontPlayer();synth.open(this,midiBytes,font,()->handler.post(()->{if(token==generation)next();}));
+            handler.post(()->{if(token!=generation||isFinishing()){synth.close();return;}sfPlayer=synth;ready=true;seek.setEnabled(true);seek.setMax((int)Math.min(Integer.MAX_VALUE,synth.duration()));toggle.setText("Play");if(restorePosition>0){synth.seek(restorePosition);restorePosition=0;}if(autoStart&&foreground)startPlayback();showLyrics(0);});
+        }catch(Exception e){handler.post(()->{if(token==generation&&!isFinishing())error("SoundFont playback failed: "+e.getMessage());});}});
     }
     void prepare(Uri uri,File file,int token){
         if(isFinishing()||token!=generation)return;
@@ -98,14 +104,14 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback {
         lyrics.setText(styled);
         if(last+1<midi.cues.size()){String upcoming=midi.cues.get(last+1).text;int n=last+1;while(n+1<midi.cues.size()&&midi.cues.get(n+1).text.startsWith(upcoming)&&!midi.cues.get(n+1).text.equals(upcoming))upcoming=midi.cues.get(++n).text;nextLine.setText(upcoming);}else nextLine.setText("");
     }
-    void startPlayback(){if(!ready||player==null)return;hasFocus=audio.requestAudioFocus(focus,AudioManager.STREAM_MUSIC,AudioManager.AUDIOFOCUS_GAIN)==AudioManager.AUDIOFOCUS_REQUEST_GRANTED;if(!hasFocus){Toast.makeText(this,"Audio is in use by another app",Toast.LENGTH_SHORT).show();return;}player.start();toggle.setText("Pause");}
-    void pausePlayback(){autoStart=false;if(ready&&player!=null){try{player.pause();toggle.setText("Play");}catch(IllegalStateException ignored){}}}
+    void startPlayback(){if(!ready||player==null)return;hasFocus=audio.requestAudioFocus(focus,AudioManager.STREAM_MUSIC,AudioManager.AUDIOFOCUS_GAIN)==AudioManager.AUDIOFOCUS_REQUEST_GRANTED;if(!hasFocus){Toast.makeText(this,"Audio is in use by another app",Toast.LENGTH_SHORT).show();return;}if(sfPlayer!=null)sfPlayer.play();else player.start();toggle.setText("Pause");}
+    void pausePlayback(){autoStart=false;if(ready&&(player!=null||sfPlayer!=null)){try{if(sfPlayer!=null)sfPlayer.pause();else player.pause();toggle.setText("Play");}catch(IllegalStateException ignored){}}}
     void error(String message){release();toggle.setText("Unavailable");new AlertDialog.Builder(this).setTitle("Song unavailable").setMessage(message).setPositiveButton("Next song",(d,w)->next()).setNegativeButton("Library",(d,w)->finish()).setCancelable(false).show();}
     void next(){if(++index>=playlist.length()){Toast.makeText(this,"Playlist finished",Toast.LENGTH_SHORT).show();finish();return;}restorePosition=0;autoStart=true;open();}
-    void release(){ready=false;if(player!=null){player.release();player=null;}if(hasFocus){audio.abandonAudioFocus(focus);hasFocus=false;}}
+    void release(){ready=false;if(sfPlayer!=null){sfPlayer.close();sfPlayer=null;}if(player!=null){player.release();player=null;}if(hasFocus){audio.abandonAudioFocus(focus);hasFocus=false;}}
     @Override protected void onResume(){super.onResume();foreground=true;}
     @Override protected void onPause(){foreground=false;pausePlayback();super.onPause();}
-    @Override protected void onSaveInstanceState(Bundle out){out.putInt("index",index);out.putInt("position",ready?player.getCurrentPosition():restorePosition);super.onSaveInstanceState(out);}
+    @Override protected void onSaveInstanceState(Bundle out){out.putInt("index",index);out.putInt("position",ready?(sfPlayer!=null?(int)sfPlayer.position():player.getCurrentPosition()):restorePosition);super.onSaveInstanceState(out);}
     @Override protected void onDestroy(){generation++;handler.removeCallbacksAndMessages(null);worker.shutdownNow();release();super.onDestroy();}
     @Override public void surfaceCreated(SurfaceHolder h){if(player!=null&&videoMode)player.setDisplay(h);}
     @Override public void surfaceChanged(SurfaceHolder h,int format,int w,int height){}

@@ -54,7 +54,7 @@ public final class AutoLibrary {
                     if(lower.endsWith(".mid")||lower.endsWith(".midi")||lower.endsWith(".kar")){
                         String title=name.substring(0,name.lastIndexOf('.')).replace('_',' ');
                         result.songs.add(new LibraryController.Song(nextId++,title,"",file.toString()));
-                    } else if((lower.endsWith(".sf2")||lower.endsWith(".sf3")) &&
+                    } else if(lower.endsWith(".sf2") &&
                             (result.soundfontUri.isEmpty()||lower.equals("default.sf2"))){
                         result.soundfontUri=file.toString();
                     }
