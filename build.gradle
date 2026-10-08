@@ -1,5 +1,4 @@
+
 plugins {
     id 'com.android.application' version '8.7.3' apply false
 }
-android { namespace 'com.karaokeflow.app'; compileSdk 35
- defaultConfig { applicationId 'com.karaokeflow.app'; minSdk 26; targetSdk 28; versionCode 5; versionName '0.4.2-auto-library' } }
